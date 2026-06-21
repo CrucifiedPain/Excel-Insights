@@ -1,59 +1,118 @@
 'use client';
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { 
-  FileSpreadsheet, 
-  Upload, 
-  ArrowUpDown, 
-  Search, 
-  X,
-  Download,
-  Filter,
-  Sun,
-  Moon,
-  Loader2,
-  AlertCircle,
+import {
+  UploadCloud,
+  FileSpreadsheet,
   Table as TableIcon,
   BarChart3,
   Bot,
   Layers,
-  LayoutDashboard
+  LayoutDashboard,
+  Settings2,
+  ChevronDown,
+  ChevronUp,
+  CheckSquare,
+  Square,
+  Sparkles,
+  Download,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
-import ExcelTable from './ExcelTable';
-import ExcelCharts from './ExcelCharts';
-import ExcelAI from './ExcelAI';
-import ExcelSummary from './ExcelSummary';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
+  LineChart, Line, PieChart, Pie, Cell, AreaChart, Area
+} from 'recharts';
 
-type DataRow = Record<string, any>;
+type DataRow = Record<string, unknown>;
 
 export default function ExcelViewer() {
+  const [, setFile] = useState<File | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [sheets, setSheets] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string>('');
+  
   const [data, setData] = useState<DataRow[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
   
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   
   const [activeTab, setActiveTab] = useState<'table' | 'charts' | 'ai' | 'summary'>('table');
 
-  const loadSheetData = useCallback((wb: XLSX.WorkBook, sheetName: string) => {
+  const [parseSettings, setParseSettings] = useState({ startCell: '', endCell: '' });
+  const [showSettings, setShowSettings] = useState(false);
+  const [rawData, setRawData] = useState<DataRow[]>([]);
+  const [rawHeaders, setRawHeaders] = useState<string[]>([]);
+  const [excludedCols, setExcludedCols] = useState<Set<string>>(new Set());
+
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  
+  // Chart states
+  const [chartType, setChartType] = useState<'bar' | 'line' | 'pie' | 'area'>('bar');
+  const [xAxisCol, setXAxisCol] = useState<string>('');
+  const [yAxisCol, setYAxisCol] = useState<string>('');
+
+  // AI states
+  const [aiPrompt, setAiPrompt] = useState<string>('');
+  const [aiResponse, setAiResponse] = useState<string>('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  useEffect(() => {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      setIsDarkMode(true);
+    }
+  }, []);
+
+  const loadSheetData = useCallback((wb: XLSX.WorkBook, sheetName: string, config?: { startCell: string, endCell: string }) => {
     try {
       const worksheet = wb.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(worksheet) as DataRow[];
+      const options: XLSX.Sheet2JSONOpts = { defval: null };
+      const currentConfig = config || parseSettings;
+
+      if (currentConfig.startCell || currentConfig.endCell) {
+         const ref = worksheet['!ref'];
+         if (ref) {
+             const parsedRef = XLSX.utils.decode_range(ref);
+             let s_r = parsedRef.s.r, s_c = parsedRef.s.c, e_r = parsedRef.e.r, e_c = parsedRef.e.c;
+             
+             if (currentConfig.startCell) {
+                 try { const s = XLSX.utils.decode_cell(currentConfig.startCell); s_r = s.r; s_c = s.c; } catch { /* ignore */ }
+             }
+             if (currentConfig.endCell) {
+                 try { const e = XLSX.utils.decode_cell(currentConfig.endCell); e_r = e.r; e_c = e.c; } catch { /* ignore */ }
+             }
+             
+             if (s_r <= e_r && s_c <= e_c) {
+                 options.range = XLSX.utils.encode_range({ s: { r: s_r, c: s_c }, e: { r: e_r, c: e_c } });
+             } else {
+                 console.warn("Invalid custom range, falling back to default");
+             }
+         }
+      }
+      
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, options) as DataRow[];
       
       setActiveSheet(sheetName);
       if (jsonData.length > 0) {
-        setHeaders(Object.keys(jsonData[0]));
+        const allHeaders = Object.keys(jsonData[0]);
+        setRawHeaders(allHeaders);
+        setRawData(jsonData);
+        setExcludedCols(new Set());
+        setHeaders(allHeaders);
         setData(jsonData);
+        
+        if (allHeaders.length > 0) setXAxisCol(allHeaders[0]);
+        if (allHeaders.length > 1) setYAxisCol(allHeaders[1]);
       } else {
+        setRawHeaders([]);
+        setRawData([]);
+        setExcludedCols(new Set());
         setHeaders([]);
         setData([]);
       }
@@ -61,450 +120,749 @@ export default function ExcelViewer() {
       setError(`Failed to load data from sheet: ${sheetName}`);
       console.error(err);
     }
-  }, []);
+  }, [parseSettings]);
 
   const processWorkbook = useCallback((wb: XLSX.WorkBook, name: string) => {
     try {
+      setParseSettings({ startCell: '', endCell: '' });
+      setExcludedCols(new Set());
       setWorkbook(wb);
       setSheets(wb.SheetNames);
       setFileName(name);
-      setError(null);
       
       if (wb.SheetNames.length > 0) {
-        loadSheetData(wb, wb.SheetNames[0]);
+        loadSheetData(wb, wb.SheetNames[0], { startCell: '', endCell: '' });
       } else {
         setError("The workbook contains no sheets.");
       }
-    } catch (err) {
-      setError("Failed to parse the workbook data.");
-      console.error(err);
+    } catch {
+      setError("Failed to parse the workbook. Please ensure it's a valid Excel file.");
+    } finally {
+      setIsLoading(false);
     }
   }, [loadSheetData]);
 
-  const handleSheetChange = (sheetName: string) => {
-    if (workbook) {
-      loadSheetData(workbook, sheetName);
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleFile(files[0]);
     }
   };
 
-  const handleDataChange = (newData: DataRow[]) => {
-    setData(newData);
-    // Update the workbook in memory
-    if (workbook && activeSheet) {
-      const newWorksheet = XLSX.utils.json_to_sheet(newData);
-      workbook.Sheets[activeSheet] = newWorksheet;
-      setWorkbook({ ...workbook });
-    }
-  };
-
-  const handleExport = () => {
-    if (!workbook || !fileName) return;
-    try {
-      // Ensure the current data is synced to the workbook before exporting
-      if (activeSheet) {
-        const newWorksheet = XLSX.utils.json_to_sheet(data);
-        workbook.Sheets[activeSheet] = newWorksheet;
-      }
-      XLSX.writeFile(workbook, `edited_${fileName}`);
-    } catch (err) {
-      console.error("Export failed", err);
-      setError("Failed to export the file.");
-    }
-  };
-
-  const handleFileUpload = useCallback((file: File) => {
-    if (!file) return;
+  const handleFile = (f: File) => {
     setIsLoading(true);
+    setFile(f);
     setError(null);
     
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const bstr = e.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        processWorkbook(wb, file.name);
-      } catch (err) {
-        setError("Failed to parse the file. Please ensure it's a valid Excel file.");
-        console.error(err);
-      } finally {
+        const arrayBuffer = e.target?.result;
+        const wb = XLSX.read(arrayBuffer, { type: 'array' });
+        processWorkbook(wb, f.name);
+      } catch {
         setIsLoading(false);
+        setError("Failed to read the file. It might be corrupted or unsupported.");
       }
     };
-    reader.onerror = () => {
-      setError("Error reading the file from your device.");
-      setIsLoading(false);
-    };
-    reader.readAsBinaryString(file);
-  }, [processWorkbook]);
+    reader.readAsArrayBuffer(f);
+  };
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv'))) {
-      handleFileUpload(file);
-    } else {
-      setError("Please upload a valid .xlsx, .xls, or .csv file.");
+  const toggleColumn = useCallback((col: string) => {
+    const nextExcluded = new Set(excludedCols);
+    if (nextExcluded.has(col)) nextExcluded.delete(col);
+    else nextExcluded.add(col);
+    
+    setExcludedCols(nextExcluded);
+    
+    const newHeaders = rawHeaders.filter(h => !nextExcluded.has(h));
+    setHeaders(newHeaders);
+    const newData = rawData.map(row => {
+        const newRow: Record<string, unknown> = {};
+        newHeaders.forEach(h => newRow[h] = row[h]);
+        return newRow;
+    });
+    setData(newData);
+    
+    if (workbook && activeSheet) {
+      const newWorksheet = XLSX.utils.json_to_sheet(newData);
+      workbook.Sheets[activeSheet] = newWorksheet;
+      setWorkbook({ ...workbook });
     }
-  }, [handleFileUpload]);
+  }, [excludedCols, rawData, rawHeaders, workbook, activeSheet]);
 
-  const onDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
 
-  const onDragLeave = useCallback(() => {
-    setIsDragging(false);
-  }, []);
+  const handleExport = () => {
+    if (!workbook || !fileName) return;
+    XLSX.writeFile(workbook, `modified_${fileName}`);
+  };
 
-  const reset = () => {
+  const clearState = () => {
+    setFile(null);
     setWorkbook(null);
     setSheets([]);
     setActiveSheet('');
     setData([]);
     setHeaders([]);
+    setRawData([]);
+    setRawHeaders([]);
+    setExcludedCols(new Set());
+    setParseSettings({ startCell: '', endCell: '' });
+    setShowSettings(false);
     setFileName(null);
     setError(null);
     setActiveTab('table');
   };
 
-  const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
+  const checkGeminiConfigured = () => {
+    // API logic should be handled server-side in Next.js
+    return true;
+  };
+
+  const askAiAboutData = async () => {
+    if (!aiPrompt.trim() || data.length === 0) return;
+    
+    if (!checkGeminiConfigured()) {
+       setAiResponse("Please configure GEMINI_API_KEY environment variable. Server-side API required.");
+       return;
+    }
+
+    setIsAiLoading(true);
+    setAiResponse('');
+    
+    try {
+      const response = await fetch('/api/gemini/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          dataPreview: data.slice(0, 50),
+          headers: headers,
+          fileName,
+          sheetName: activeSheet,
+          totalRows: data.length
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      setAiResponse(result.text);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setAiResponse(`Error: ${msg || 'Failed to analyze data.'}`);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Generate basic summary statistics
+  const summaryStats = useMemo(() => {
+    if (data.length === 0 || headers.length === 0) return null;
+    
+    const stats: Record<string, { type: string, nulls: number, min?: number, max?: number, unique?: number, textSample?: string }> = {};
+    
+    headers.forEach(h => {
+      const values = data.map(row => row[h]);
+      const validValues = values.filter(v => v !== null && v !== undefined && v !== '');
+      
+      const isNumeric = validValues.length > 0 && validValues.every(v => typeof v === 'number' || (!isNaN(Number(v)) && typeof v === 'string'));
+      
+      if (isNumeric) {
+        const numValues = validValues.map(v => Number(v));
+        stats[h] = {
+          type: 'Numeric',
+          nulls: values.length - validValues.length,
+          min: Math.min(...numValues),
+          max: Math.max(...numValues),
+        };
+      } else {
+        const unique = new Set(validValues).size;
+        stats[h] = {
+          type: 'Text/Mixed',
+          nulls: values.length - validValues.length,
+          unique: unique,
+          textSample: validValues[0] ? String(validValues[0]).substring(0, 20) + (String(validValues[0]).length > 20 ? '...' : '') : 'N/A'
+        };
+      }
+    });
+    
+    return stats;
+  }, [data, headers]);
+
+
+  const COLORS = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6', '#10b981', '#f43f5e', '#0ea5e9'];
+
+  const renderChart = () => {
+    if (data.length === 0 || !xAxisCol || !yAxisCol) return <div className="p-8 text-center text-zinc-500">Not enough data to render chart</div>;
+    
+    // Process data for charting: max 100 rows, try to cast Y to number
+    const chartData = data.slice(0, 100).map(row => ({
+      name: String(row[xAxisCol]),
+      value: typeof row[yAxisCol] === 'number' ? row[yAxisCol] : (Number(row[yAxisCol]) || 0)
+    }));
+
+    switch (chartType) {
+      case 'bar':
+        return (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 50 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#333' : '#eee'} />
+              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} />
+              <YAxis stroke={isDarkMode ? '#aaa' : '#666'} />
+              <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
+              <Legend />
+              <Bar dataKey="value" name={yAxisCol} fill="#6366f1" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        );
+      case 'line':
+        return (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 50 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#333' : '#eee'} />
+              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} />
+              <YAxis stroke={isDarkMode ? '#aaa' : '#666'} />
+              <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
+              <Legend />
+              <Line type="monotone" dataKey="value" name={yAxisCol} stroke="#ec4899" strokeWidth={2} activeDot={{ r: 8 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        );
+      case 'area':
+        return (
+           <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 50 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#333' : '#eee'} />
+              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} />
+              <YAxis stroke={isDarkMode ? '#aaa' : '#666'} />
+              <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
+              <Legend />
+              <Area type="monotone" dataKey="value" name={yAxisCol} stroke="#14b8a6" fill="#ccfbf1" fillOpacity={isDarkMode ? 0.2 : 0.8} />
+            </AreaChart>
+          </ResponsiveContainer>
+        );
+      case 'pie':
+        // Aggregate for pie
+        const agg: Record<string, number> = {};
+        chartData.forEach(d => {
+          if (d.value > 0) {
+            agg[d.name] = (agg[d.name] || 0) + d.value;
+          }
+        });
+        const pieData = Object.keys(agg).map(k => ({ name: k, value: agg[k] })).sort((a,b) => b.value - a.value).slice(0, 10); // top 10
+        
+        return (
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={120} paddingAngle={2} dataKey="value" nameKey="name" label={({name, percent}) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}>
+                {pieData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        );
+    }
+  };
 
   return (
     <div className={cn(
-      "min-h-screen font-sans transition-colors duration-300",
-      isDarkMode 
-        ? "bg-black text-zinc-100 selection:bg-zinc-800 selection:text-white" 
-        : "bg-[#F8F9FA] text-[#1A1C1E] selection:bg-indigo-100 selection:text-indigo-900"
+      "min-h-screen transition-colors duration-300",
+      isDarkMode ? "bg-zinc-950 text-zinc-100" : "bg-zinc-50 text-zinc-900"
     )}>
-      {/* Header */}
+      {/* Top Header */}
       <header className={cn(
-        "sticky top-0 z-10 px-6 py-4 border-b transition-colors duration-300",
-        isDarkMode ? "bg-black border-zinc-800" : "bg-white border-zinc-200"
+        "px-6 py-4 border-b sticky top-0 z-20 backdrop-blur-md",
+        isDarkMode ? "border-zinc-800 bg-zinc-950/80" : "border-zinc-200 bg-white/80"
       )}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className={cn(
-              "w-10 h-10 rounded-xl flex items-center justify-center shadow-lg transition-all",
-              isDarkMode ? "bg-zinc-100 text-black" : "bg-indigo-600 text-white shadow-indigo-600/20"
+              "w-10 h-10 rounded-xl flex items-center justify-center",
+              isDarkMode ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600"
             )}>
-              <FileSpreadsheet className="w-6 h-6" />
+              <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">Excel Insight</h1>
-              <p className={cn(
-                "text-xs font-medium uppercase tracking-wider",
-                isDarkMode ? "text-zinc-500" : "text-zinc-500"
-              )}>Interactive Data Viewer</p>
+              <h1 className="font-bold text-lg leading-tight tracking-tight">Excel Viewer</h1>
+              <p className={cn("text-xs", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>Local processing • Secure • Analytical</p>
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={toggleDarkMode}
-              className={cn(
-                "p-2 rounded-xl transition-all border",
-                isDarkMode 
-                  ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800" 
-                  : "bg-white border-zinc-200 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
-              )}
-              title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-            >
-              {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-            </button>
-
-            {fileName && (
-              <div className="flex items-center gap-4">
-                <div className={cn(
-                  "hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors",
-                  isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-100 border-zinc-200"
-                )}>
-                  <FileSpreadsheet className={cn("w-4 h-4", isDarkMode ? "text-zinc-500" : "text-zinc-500")} />
-                  <span className={cn("text-sm font-medium max-w-[200px] truncate", isDarkMode ? "text-zinc-300" : "text-zinc-700")}>{fileName}</span>
-                  <button onClick={reset} className={cn("p-1 rounded-md transition-colors", isDarkMode ? "hover:bg-zinc-800" : "hover:bg-zinc-200")}>
-                    <X className="w-3 h-3 text-zinc-500" />
-                  </button>
-                </div>
-                <button 
-                  onClick={reset}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm flex items-center gap-2",
-                    isDarkMode 
-                      ? "bg-zinc-100 text-black hover:bg-white" 
-                      : "bg-zinc-900 text-white hover:bg-zinc-800"
-                  )}
-                >
-                  <Upload className="w-4 h-4" />
-                  New Upload
-                </button>
-              </div>
-            )}
-          </div>
+          {fileName && (
+            <div className="flex items-center gap-3">
+              <span className={cn("text-sm font-medium", isDarkMode ? "text-zinc-300" : "text-zinc-600")}>
+                {fileName}
+              </span>
+              <button 
+                onClick={clearState}
+                className={cn(
+                  "p-2 flex items-center justify-center rounded-lg transition-colors",
+                  isDarkMode ? "hover:bg-zinc-800 text-zinc-400 hover:text-rose-400" : "hover:bg-zinc-100 text-zinc-500 hover:text-rose-600"
+                )}
+                title="Close file"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 md:p-10">
+      <main className="max-w-7xl mx-auto p-6 min-h-[calc(100vh-80px)]">
         <AnimatePresence mode="wait">
-          {!fileName ? (
-            <motion.div
+          {!workbook ? (
+            <motion.div 
               key="upload"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="max-w-2xl mx-auto"
+              className="h-[calc(100vh-140px)] flex items-center justify-center"
             >
-              <div 
-                onDrop={onDrop}
-                onDragOver={onDragOver}
-                onDragLeave={onDragLeave}
-                className={cn(
-                  "relative group cursor-pointer border-2 border-dashed rounded-3xl p-12 transition-all duration-300 flex flex-col items-center text-center",
-                  isDragging 
-                    ? (isDarkMode ? "border-white bg-zinc-900/50 scale-[1.02]" : "border-indigo-500 bg-indigo-50/50 scale-[1.02]")
-                    : (isDarkMode ? "border-zinc-800 bg-black hover:border-zinc-700 hover:bg-zinc-900/30" : "border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50/50"),
-                  isLoading && "opacity-50 pointer-events-none"
-                )}
-              >
-                <input 
-                  type="file" 
-                  accept=".xlsx, .xls, .csv" 
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                  onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-                  disabled={isLoading}
-                />
-                
-                <div className={cn(
-                  "w-20 h-20 rounded-2xl flex items-center justify-center mb-8 transition-all duration-300",
-                  isDragging 
-                    ? (isDarkMode ? "bg-white text-black scale-110" : "bg-indigo-600 text-white scale-110") 
-                    : (isDarkMode ? "bg-zinc-900 text-zinc-600 group-hover:bg-zinc-800 group-hover:text-zinc-400" : "bg-zinc-100 text-zinc-400 group-hover:bg-zinc-200 group-hover:text-zinc-500")
-                )}>
-                  {isLoading ? <Loader2 className="w-10 h-10 animate-spin" /> : <Upload className="w-10 h-10" />}
-                </div>
-                
-                <h2 className="text-2xl font-bold mb-3 tracking-tight">Upload your Spreadsheet</h2>
-                <p className="text-zinc-500 max-w-sm mx-auto mb-8 leading-relaxed">
-                  Drag and drop your <span className={cn("font-bold", isDarkMode ? "text-zinc-300" : "text-zinc-700")}>.xlsx</span> or <span className={cn("font-bold", isDarkMode ? "text-zinc-300" : "text-zinc-700")}>.xls</span> files here, or click to browse your computer.
-                </p>
-                
-                <div className="flex flex-wrap justify-center gap-4">
-                  <FeatureBadge isDarkMode={isDarkMode} icon={<ArrowUpDown className="w-4 h-4" />}>Sortable Columns</FeatureBadge>
-                  <FeatureBadge isDarkMode={isDarkMode} icon={<Search className="w-4 h-4" />}>Global Search</FeatureBadge>
-                  <FeatureBadge isDarkMode={isDarkMode} icon={<LayoutDashboard className="w-4 h-4" />}>Data Dashboard</FeatureBadge>
-                </div>
-              </div>
-
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
+              <div className="w-full max-w-xl">
+                <div 
                   className={cn(
-                    "mt-8 p-4 rounded-xl border text-sm text-left flex items-start gap-3",
-                    isDarkMode 
-                      ? "bg-red-950/30 border-red-900/50 text-red-400" 
-                      : "bg-red-50 border-red-200 text-red-600"
+                    "border-2 border-dashed rounded-3xl p-12 text-center transition-all duration-300 group relative overflow-hidden",
+                    isDragging 
+                      ? (isDarkMode ? "border-indigo-500 bg-indigo-500/10" : "border-indigo-500 bg-indigo-50")
+                      : (isDarkMode ? "border-zinc-800 hover:border-zinc-600 hover:bg-zinc-900/50" : "border-zinc-300 hover:border-zinc-400 hover:bg-zinc-100/50")
                   )}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    const files = e.dataTransfer.files;
+                    if (files && files.length > 0) handleFile(files[0]);
+                  }}
                 >
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <p className="leading-relaxed">{error}</p>
-                </motion.div>
-              )}
-              
-              <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <FeatureCard 
-                  isDarkMode={isDarkMode}
-                  title="Instant Parsing" 
-                  desc="Fast processing of large datasets directly in your browser."
-                />
-                <FeatureCard 
-                  isDarkMode={isDarkMode}
-                  title="Dynamic Sorting" 
-                  desc="Click any header to sort your data instantly."
-                />
-                <FeatureCard 
-                  isDarkMode={isDarkMode}
-                  title="Privacy First" 
-                  desc="Your data stays on your device. We never upload files to a server."
-                />
+                  <input 
+                    type="file" 
+                    accept=".xlsx,.xls,.csv" 
+                    onChange={handleFileUpload} 
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  />
+                  
+                  <div className={cn(
+                    "w-20 h-20 mx-auto rounded-3xl flex items-center justify-center mb-6 transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3 shadow-lg",
+                    isDarkMode ? "bg-zinc-800 shadow-black/50 text-indigo-400" : "bg-white shadow-indigo-500/10 text-indigo-600"
+                  )}>
+                    {isLoading ? <RefreshCw className="w-10 h-10 animate-spin" /> : <UploadCloud className="w-10 h-10" />}
+                  </div>
+                  
+                  <h3 className="text-xl font-bold mb-2">Upload Spreadsheet</h3>
+                  <p className={cn("text-sm mb-8", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>
+                    Drag and drop your Excel file here, or click to browse. <br/>
+                    Supports .xlsx, .xls, and .csv
+                  </p>
+
+                  <div className="flex items-center justify-center gap-4 text-xs font-semibold uppercase tracking-wider">
+                     <span className={cn("px-3 py-1 rounded-full", isDarkMode ? "bg-zinc-800 text-zinc-300" : "bg-white text-zinc-600 shadow-sm")}>Fully Local</span>
+                     <span className={cn("px-3 py-1 rounded-full", isDarkMode ? "bg-zinc-800 text-zinc-300" : "bg-white text-zinc-600 shadow-sm")}>Fast Parsing</span>
+                  </div>
+
+                  {error && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute bottom-4 left-0 right-0 p-4 mx-8 bg-rose-500/10 border border-rose-500/20 text-rose-500 rounded-xl text-sm">
+                      {error}
+                    </motion.div>
+                  )}
+                </div>
               </div>
             </motion.div>
           ) : (
-            <motion.div
+            <motion.div 
               key="workspace"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="space-y-6"
             >
+              {/* Parse Settings Panel */}
+              <div className={cn(
+                "border rounded-2xl transition-all overflow-hidden shadow-sm",
+                isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200"
+              )}>
+                <button 
+                  onClick={() => setShowSettings(!showSettings)}
+                  className={cn(
+                    "w-full px-6 py-4 flex items-center justify-between font-bold text-sm transition-colors",
+                    isDarkMode ? "hover:bg-zinc-800/80 text-zinc-200" : "hover:bg-zinc-50 text-zinc-800"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <Settings2 className={cn("w-5 h-5", isDarkMode ? "text-indigo-400" : "text-indigo-600")} />
+                    Data Import & Parse Settings
+                  </div>
+                  {showSettings ? <ChevronUp className="w-5 h-5 text-zinc-500" /> : <ChevronDown className="w-5 h-5 text-zinc-500" />}
+                </button>
+
+                <AnimatePresence>
+                  {showSettings && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className={cn("p-6 border-t", isDarkMode ? "border-zinc-800" : "border-zinc-200")}>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                          {/* Coordinates */}
+                          <div className="space-y-4">
+                            <h4 className={cn("text-xs font-bold uppercase tracking-widest flex items-center gap-2", isDarkMode ? "text-zinc-500" : "text-zinc-400")}>
+                              <Layers className="w-3.5 h-3.5" /> Cell Coordinates
+                            </h4>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <label className={cn("block text-xs font-medium mb-1.5", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>Start Cell</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="e.g. A1" 
+                                  value={parseSettings.startCell}
+                                  onChange={(e) => setParseSettings(p => ({...p, startCell: e.target.value.toUpperCase()}))}
+                                  className={cn(
+                                    "w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all",
+                                    isDarkMode ? "bg-black border-zinc-800 text-white focus:border-zinc-600" : "bg-zinc-50 border-zinc-200 text-zinc-900 focus:border-indigo-500"
+                                  )}
+                                />
+                              </div>
+                              <div>
+                                <label className={cn("block text-xs font-medium mb-1.5", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>End Cell (Optional)</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="e.g. Z100" 
+                                  value={parseSettings.endCell}
+                                  onChange={(e) => setParseSettings(p => ({...p, endCell: e.target.value.toUpperCase()}))}
+                                  className={cn(
+                                    "w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 transition-all",
+                                    isDarkMode ? "bg-black border-zinc-800 text-white focus:border-zinc-600" : "bg-zinc-50 border-zinc-200 text-zinc-900 focus:border-indigo-500"
+                                  )}
+                                />
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => { if(workbook && activeSheet) loadSheetData(workbook, activeSheet, parseSettings); }}
+                              className={cn(
+                                "px-4 py-2.5 rounded-xl text-sm font-bold transition-all w-full mt-2 border",
+                                isDarkMode ? "bg-zinc-800 border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600" : "bg-white hover:bg-zinc-50 border-zinc-200 hover:border-zinc-300 shadow-sm"
+                              )}
+                            >
+                              Apply Coordinates & Re-parse
+                            </button>
+                          </div>
+
+                          {/* Column Selection */}
+                          <div>
+                             <h4 className={cn("text-xs font-bold uppercase tracking-widest flex items-center gap-2 mb-4", isDarkMode ? "text-zinc-500" : "text-zinc-400")}>
+                                <TableIcon className="w-3.5 h-3.5" /> Column Selection
+                             </h4>
+                             {rawHeaders.length === 0 ? (
+                                <p className={cn("text-sm italic", isDarkMode ? "text-zinc-600" : "text-zinc-400")}>No columns detected. Apply coordinates to parse.</p>
+                             ) : (
+                                <div className="flex flex-wrap gap-2 max-h-[160px] overflow-y-auto pr-2 custom-scrollbar">
+                                   {rawHeaders.map(col => {
+                                      const isExcluded = excludedCols.has(col);
+                                      return (
+                                         <button
+                                           key={col}
+                                           onClick={() => toggleColumn(col)}
+                                           className={cn(
+                                             "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border font-medium transition-all max-w-[200px] truncate",
+                                             !isExcluded 
+                                               ? (isDarkMode ? "bg-indigo-500/20 border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/30" : "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100")
+                                               : (isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-500 hover:bg-zinc-800 opacity-60" : "bg-white border-zinc-200 text-zinc-400 hover:bg-zinc-50 opacity-60")
+                                           )}
+                                           title={col}
+                                         >
+                                           {!isExcluded ? <CheckSquare className="w-3.5 h-3.5 shrink-0" /> : <Square className="w-3.5 h-3.5 shrink-0" />}
+                                           <span className="truncate">{col}</span>
+                                         </button>
+                                      );
+                                   })}
+                                </div>
+                             )}
+                          </div>
+                        </div>
+
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               {/* Toolbar */}
               <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
                 <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
-                  <button
-                    onClick={() => setActiveTab('summary')}
-                    className={cn(
-                      "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap",
-                      activeTab === 'summary' 
-                        ? (isDarkMode ? "bg-zinc-800 text-white" : "bg-zinc-900 text-white") 
-                        : (isDarkMode ? "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" : "text-zinc-600 hover:bg-zinc-100")
-                    )}
-                  >
-                    <LayoutDashboard className="w-4 h-4" />
-                    Summary
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('table')}
-                    className={cn(
-                      "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap",
-                      activeTab === 'table' 
-                        ? (isDarkMode ? "bg-zinc-800 text-white" : "bg-zinc-900 text-white") 
-                        : (isDarkMode ? "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" : "text-zinc-600 hover:bg-zinc-100")
-                    )}
-                  >
-                    <TableIcon className="w-4 h-4" />
-                    Data View
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('charts')}
-                    className={cn(
-                      "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap",
-                      activeTab === 'charts' 
-                        ? (isDarkMode ? "bg-zinc-800 text-white" : "bg-zinc-900 text-white") 
-                        : (isDarkMode ? "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" : "text-zinc-600 hover:bg-zinc-100")
-                    )}
-                  >
-                    <BarChart3 className="w-4 h-4" />
-                    Charts
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('ai')}
-                    className={cn(
-                      "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap",
-                      activeTab === 'ai' 
-                        ? (isDarkMode ? "bg-zinc-800 text-white" : "bg-zinc-900 text-white") 
-                        : (isDarkMode ? "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200" : "text-zinc-600 hover:bg-zinc-100")
-                    )}
-                  >
-                    <Bot className="w-4 h-4" />
-                    Ask AI
-                  </button>
+                  {[
+                    { id: 'table', icon: <TableIcon className="w-4 h-4" />, label: 'Data Table' },
+                    { id: 'summary', icon: <LayoutDashboard className="w-4 h-4" />, label: 'Summary Stats' },
+                    { id: 'charts', icon: <BarChart3 className="w-4 h-4" />, label: 'Visualize' },
+                    { id: 'ai', icon: <Bot className="w-4 h-4" />, label: 'AI Assitance' },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id as 'table' | 'charts' | 'ai' | 'summary')}
+                      className={cn(
+                        "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all whitespace-nowrap border",
+                        activeTab === tab.id 
+                          ? (isDarkMode ? "bg-indigo-500 text-white border-indigo-500 shadow-md shadow-indigo-500/20" : "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/20")
+                          : (isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200" : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900")
+                      )}
+                    >
+                      {tab.icon}
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
 
-                <div className="flex items-center gap-3 w-full md:w-auto">
-                  {sheets.length > 1 && (
-                    <div className="relative flex items-center">
-                      <Layers className={cn(
-                        "absolute left-3 w-4 h-4",
-                        isDarkMode ? "text-zinc-500" : "text-zinc-400"
-                      )} />
-                      <select
-                        value={activeSheet}
-                        onChange={(e) => handleSheetChange(e.target.value)}
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                    <select
+                      value={activeSheet}
+                      onChange={(e) => loadSheetData(workbook, e.target.value)}
+                      className={cn(
+                        "px-4 py-2.5 rounded-xl text-sm font-medium border appearance-none w-full md:w-48 outline-none focus:ring-2",
+                        isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-300 focus:ring-zinc-700" : "bg-white border-zinc-200 focus:ring-zinc-200"
+                      )}
+                    >
+                      {sheets.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+
+                    <button
+                      onClick={handleExport}
+                      className={cn(
+                        "p-2.5 rounded-xl border transition-all shrink-0",
+                        isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800" : "bg-white border-zinc-200 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50"
+                      )}
+                      title="Export Modified Workbook"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                </div>
+              </div>
+
+              {/* Main Content Area */}
+              <div className={cn(
+                "border rounded-2xl overflow-hidden min-h-[500px] flex flex-col",
+                isDarkMode ? "bg-zinc-900/50 border-zinc-800" : "bg-white border-zinc-200 shadow-sm"
+              )}>
+                {activeTab === 'table' && (
+                  <div className="flex-1 overflow-auto bg-transparent relative">
+                     {headers.length === 0 ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500">
+                          <TableIcon className="w-12 h-12 mb-4 opacity-50" />
+                          <p>No valid table data to display.</p>
+                          <p className="text-sm opacity-60">Adjust Parse Settings or select different columns.</p>
+                        </div>
+                     ) : (
+                        <table className="w-full text-sm text-left">
+                          <thead className={cn(
+                            "sticky top-0 z-10 text-xs uppercase font-bold",
+                            isDarkMode ? "bg-zinc-900 text-zinc-400" : "bg-zinc-100 text-zinc-500"
+                          )}>
+                            <tr>
+                              <th className={cn("px-6 py-4 border-b", isDarkMode ? "border-zinc-800" : "border-zinc-200 w-16 text-center")}>#</th>
+                              {headers.map((h, i) => (
+                                <th key={i} className={cn("px-6 py-4 border-b whitespace-nowrap", isDarkMode ? "border-zinc-800" : "border-zinc-200")}>
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.slice(0, 1000).map((row, rowIndex) => (
+                              <tr key={rowIndex} className={cn(
+                                "border-b last:border-0 transition-colors",
+                                isDarkMode ? "border-zinc-800/50 hover:bg-zinc-800/50" : "border-zinc-100 hover:bg-zinc-50"
+                              )}>
+                                <td className={cn("px-6 py-3 font-mono text-xs opacity-50 text-center border-r", isDarkMode ? "border-zinc-800/50" : "border-zinc-100")}>{rowIndex + 1}</td>
+                                {headers.map((h, colIndex) => (
+                                  <td key={colIndex} className="px-6 py-3 whitespace-nowrap max-w-xs truncate" title={String(row[h])}>
+                                    {row[h] !== null && row[h] !== undefined ? String(row[h]) : <span className="opacity-30 italic">null</span>}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                     )}
+                  </div>
+                )}
+
+                {activeTab === 'summary' && summaryStats && (
+                  <div className="flex-1 p-6 overflow-auto">
+                    <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><LayoutDashboard className="w-5 h-5" /> Summary Statistics</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div className={cn("p-6 rounded-2xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200")}>
+                        <h3 className={cn("text-xs uppercase font-bold tracking-widest mb-1", isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Total Rows</h3>
+                        <p className="text-4xl font-light">{data.length}</p>
+                      </div>
+                      <div className={cn("p-6 rounded-2xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200")}>
+                         <h3 className={cn("text-xs uppercase font-bold tracking-widest mb-1", isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Active Columns</h3>
+                         <p className="text-4xl font-light">{headers.length}</p>
+                      </div>
+                      <div className={cn("p-6 rounded-2xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200")}>
+                         <h3 className={cn("text-xs uppercase font-bold tracking-widest mb-1", isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Excluded Columns</h3>
+                         <p className="text-4xl font-light">{excludedCols.size}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-8">
+                       <h3 className="font-bold text-lg mb-4">Column Analysis</h3>
+                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                          {Object.keys(summaryStats).map(h => {
+                            const stat = summaryStats[h];
+                            return (
+                              <div key={h} className={cn("p-5 rounded-2xl border flex flex-col gap-3", isDarkMode ? "bg-zinc-900/50 border-zinc-800" : "bg-white border-zinc-200 shadow-sm")}>
+                                <div className="flex justify-between items-start">
+                                   <div className="font-bold truncate max-w-[80%]" title={h}>{h}</div>
+                                   <span className={cn("text-xs px-2 py-1 rounded-md font-mono", stat.type === 'Numeric' ? (isDarkMode ? "bg-indigo-500/20 text-indigo-300" : "bg-indigo-50 text-indigo-600") : (isDarkMode ? "bg-amber-500/20 text-amber-300" : "bg-amber-50 text-amber-600"))}>{stat.type}</span>
+                                </div>
+                                
+                                <div className="space-y-1 text-sm mt-auto">
+                                   <div className="flex justify-between">
+                                     <span className={cn(isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Null values:</span>
+                                     <span className="font-mono">{stat.nulls}</span>
+                                   </div>
+                                   {stat.type === 'Numeric' ? (
+                                      <>
+                                        <div className="flex justify-between">
+                                          <span className={cn(isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Min:</span>
+                                          <span className="font-mono">{stat.min}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span className={cn(isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Max:</span>
+                                          <span className="font-mono">{stat.max}</span>
+                                        </div>
+                                      </>
+                                   ) : (
+                                     <>
+                                        <div className="flex justify-between">
+                                          <span className={cn(isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Unique values:</span>
+                                          <span className="font-mono">{stat.unique}</span>
+                                        </div>
+                                        <div className="flex flex-col mt-2 pt-2 border-t border-dashed border-zinc-200 dark:border-zinc-800">
+                                          <span className={cn("text-xs mb-1", isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Sample:</span>
+                                          <span className="font-mono text-xs opacity-70 truncate">{stat.textSample}</span>
+                                        </div>
+                                     </>
+                                   )}
+                                </div>
+                              </div>
+                            )
+                          })}
+                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'charts' && (
+                  <div className="flex flex-col h-full flex-1">
+                    <div className={cn("p-4 border-b grid grid-cols-1 md:grid-cols-3 gap-4", isDarkMode ? "border-zinc-800 bg-zinc-900" : "border-zinc-200 bg-zinc-50")}>
+                      <div>
+                         <label className="block text-xs font-bold mb-1.5 opacity-70">Chart Type</label>
+                         <select value={chartType} onChange={(e) => setChartType(e.target.value as 'bar' | 'line' | 'pie' | 'area')} className={cn("w-full px-3 py-2 border rounded-lg text-sm", isDarkMode ? "bg-black border-zinc-800" : "bg-white border-zinc-200")}>
+                           <option value="bar">Bar Chart</option>
+                           <option value="line">Line Chart</option>
+                           <option value="area">Area Chart</option>
+                           <option value="pie">Pie Chart</option>
+                         </select>
+                      </div>
+                      <div>
+                         <label className="block text-xs font-bold mb-1.5 opacity-70">X-Axis (Category)</label>
+                         <select value={xAxisCol} onChange={(e) => setXAxisCol(e.target.value)} className={cn("w-full px-3 py-2 border rounded-lg text-sm truncate", isDarkMode ? "bg-black border-zinc-800" : "bg-white border-zinc-200")}>
+                           {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                         </select>
+                      </div>
+                      <div>
+                         <label className="block text-xs font-bold mb-1.5 opacity-70">Y-Axis (Value)</label>
+                         <select value={yAxisCol} onChange={(e) => setYAxisCol(e.target.value)} className={cn("w-full px-3 py-2 border rounded-lg text-sm truncate", isDarkMode ? "bg-black border-zinc-800" : "bg-white border-zinc-200")}>
+                           {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                         </select>
+                      </div>
+                    </div>
+                    <div className="flex-1 min-h-[400px] p-6">
+                      {renderChart()}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'ai' && (
+                  <div className="flex flex-col h-[500px]">
+                    <div className="flex-1 p-6 overflow-y-auto">
+                      {aiResponse ? (
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                           <div className="flex items-center gap-2 mb-4 text-indigo-500 font-bold">
+                             <Sparkles className="w-5 h-5" /> AI Analysis
+                           </div>
+                           <div className={cn("p-6 rounded-2xl whitespace-pre-wrap leading-relaxed", isDarkMode ? "bg-zinc-800/50" : "bg-zinc-50")}>
+                              {aiResponse}
+                           </div>
+                        </div>
+                      ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-center px-4">
+                           <div className={cn("w-16 h-16 rounded-full flex items-center justify-center mb-6", isDarkMode ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600")}>
+                              <Bot className="w-8 h-8" />
+                           </div>
+                           <h3 className="text-xl font-bold mb-2">Ask AI About Your Data</h3>
+                           <p className={cn("max-w-md mx-auto mb-8", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>
+                             Ask questions to find trends, summarize information, or find specific details within the {activeSheet} sheet.
+                           </p>
+                           <div className="flex flex-wrap items-center justify-center gap-3">
+                             {["Summarize this dataset", "What are the key trends?", "Are there any outliers?"].map(p => (
+                               <button 
+                                 key={p} 
+                                 onClick={() => setAiPrompt(p)}
+                                 className={cn("px-4 py-2 rounded-full text-sm border transition-colors", isDarkMode ? "border-zinc-700 bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300" : "border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-zinc-700")}
+                               >
+                                 &quot;{p}&quot;
+                               </button>
+                             ))}
+                           </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className={cn("p-4 border-t relative", isDarkMode ? "border-zinc-800 bg-zinc-900/50" : "border-zinc-200 bg-zinc-50")}>
+                      <textarea
+                        value={aiPrompt}
+                        onChange={e => setAiPrompt(e.target.value)}
+                        placeholder="Ask a question about this data..."
                         className={cn(
-                          "pl-9 pr-8 py-2 border rounded-xl text-sm font-medium focus:outline-none focus:ring-2 transition-all appearance-none",
-                          isDarkMode 
-                            ? "bg-zinc-900 border-zinc-800 text-zinc-300 focus:ring-zinc-700" 
-                            : "bg-white border-zinc-200 text-zinc-700 focus:ring-indigo-500/20"
+                          "w-full resize-none p-4 pr-16 border rounded-xl text-sm focus:outline-none focus:ring-2",
+                          isDarkMode ? "bg-black border-zinc-800 text-zinc-100 focus:border-zinc-600 focus:ring-zinc-800" : "bg-white border-zinc-200 text-zinc-900 focus:border-indigo-500 focus:ring-indigo-100"
+                        )}
+                        rows={2}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            askAiAboutData();
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={askAiAboutData}
+                        disabled={isAiLoading || !aiPrompt.trim()}
+                        className={cn(
+                          "absolute bottom-7 right-7 p-2 rounded-lg transition-all",
+                          isAiLoading ? "opacity-50 cursor-not-allowed" : "hover:scale-105",
+                          isDarkMode ? "bg-indigo-500 text-white" : "bg-indigo-600 text-white"
                         )}
                       >
-                        {sheets.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
+                        {isAiLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+                      </button>
                     </div>
-                  )}
-                  <button 
-                    onClick={handleExport}
-                    className={cn(
-                      "flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 border rounded-xl text-sm font-bold transition-all shadow-sm",
-                      isDarkMode 
-                        ? "bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 hover:text-white" 
-                        : "bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                    )}
-                  >
-                    <Download className="w-4 h-4" />
-                    Export
-                  </button>
-                </div>
-              </div>
-
-              {/* Error Banner */}
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={cn(
-                    "p-4 rounded-xl border text-sm text-left flex items-start gap-3",
-                    isDarkMode 
-                      ? "bg-red-950/30 border-red-900/50 text-red-400" 
-                      : "bg-red-50 border-red-200 text-red-600"
-                  )}
-                >
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <p className="leading-relaxed">{error}</p>
-                </motion.div>
-              )}
-
-              {/* Tab Content */}
-              <div className="mt-6">
-                {activeTab === 'summary' && (
-                  <ExcelSummary 
-                    data={data} 
-                    headers={headers} 
-                    isDarkMode={isDarkMode} 
-                  />
-                )}
-                {activeTab === 'table' && (
-                  <ExcelTable 
-                    data={data} 
-                    headers={headers} 
-                    isDarkMode={isDarkMode} 
-                    onDataChange={handleDataChange} 
-                  />
-                )}
-                {activeTab === 'charts' && (
-                  <ExcelCharts 
-                    data={data} 
-                    headers={headers} 
-                    isDarkMode={isDarkMode} 
-                  />
-                )}
-                {activeTab === 'ai' && (
-                  <ExcelAI 
-                    data={data} 
-                    headers={headers} 
-                    isDarkMode={isDarkMode} 
-                  />
+                  </div>
                 )}
               </div>
+
             </motion.div>
           )}
         </AnimatePresence>
       </main>
-    </div>
-  );
-}
-
-function FeatureBadge({ children, icon, isDarkMode }: { children: React.ReactNode; icon: React.ReactNode; isDarkMode: boolean }) {
-  return (
-    <div className={cn(
-      "flex items-center gap-2 px-4 py-2 border rounded-full text-sm font-medium shadow-sm transition-colors",
-      isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-400" : "bg-white border-zinc-200 text-zinc-600"
-    )}>
-      <div className={isDarkMode ? "text-zinc-100" : "text-indigo-500"}>
-        {icon}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function FeatureCard({ title, desc, isDarkMode }: { title: string; desc: string; isDarkMode: boolean }) {
-  return (
-    <div className={cn(
-      "border p-6 rounded-2xl shadow-sm transition-all",
-      isDarkMode 
-        ? "bg-zinc-900/50 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900" 
-        : "bg-white border-zinc-200 hover:shadow-md"
-    )}>
-      <h3 className={cn("font-bold mb-2 transition-colors", isDarkMode ? "text-zinc-100" : "text-zinc-900")}>{title}</h3>
-      <p className="text-sm text-zinc-500 leading-relaxed">{desc}</p>
     </div>
   );
 }

@@ -1,73 +1,36 @@
-# Deployment Guide
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-This guide provides instructions on how to deploy **Excel Insight** locally and on Vercel.
+## Getting Started
 
----
+First, run the development server:
 
-## I. Local Deployment
-
-To run this application on your local machine, follow these steps:
-
-### 1. Prerequisites
-- **Node.js**: Ensure you have Node.js (v18 or later) installed.
-- **npm**: npm is usually installed with Node.js.
-
-### 2. Clone the Repository
-```bash
-git clone <your-repository-url>
-cd excel-insight
-```
-
-### 3. Install Dependencies
-```bash
-npm install
-```
-
-### 4. Environment Variables
-Create a `.env.local` file in the root directory and add any necessary environment variables. For this app, the basic setup is:
-```env
-NEXT_PUBLIC_GEMINI_API_KEY=your_api_key_here
-```
-
-### 5. Run the Development Server
 ```bash
 npm run dev
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser to see the application.
-
-### 6. Build for Production
-To test the production build locally:
-```bash
-npm run build
-npm run start
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
 ```
 
----
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-## II. Deployment on Vercel
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-Vercel is the recommended platform for deploying Next.js applications.
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-### 1. Push to GitHub/GitLab/Bitbucket
-Ensure your code is pushed to a remote Git repository.
+## Learn More
 
-### 2. Connect to Vercel
-1. Log in to your [Vercel Dashboard](https://vercel.com).
-2. Click **"New Project"**.
-3. Import your repository.
+To learn more about Next.js, take a look at the following resources:
 
-### 3. Configure Project
-- **Framework Preset**: Next.js (automatically detected).
-- **Root Directory**: `./` (default).
-- **Build Command**: `npm run build` (default).
-- **Output Directory**: `.next` (default).
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-### 4. Add Environment Variables
-In the Vercel project settings, add the following environment variables:
-- `NEXT_PUBLIC_GEMINI_API_KEY`: Your Gemini API key.
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-### 5. Deploy
-Click **"Deploy"**. Vercel will build and host your application, providing you with a production URL.
+## Deploy on Vercel
 
-### 6. Automatic Deploys
-Once connected, every push to your `main` branch will automatically trigger a new deployment.
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
