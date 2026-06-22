@@ -476,7 +476,43 @@ export default function ExcelViewer() {
 
       <main className="max-w-7xl mx-auto p-6 min-h-[calc(100vh-80px)]">
         <AnimatePresence mode="wait">
-          {!workbook ? (
+          {isLoading ? (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="h-[calc(100vh-140px)] flex flex-col items-center justify-center space-y-6"
+            >
+              <RefreshCw className="w-12 h-12 animate-spin text-indigo-500" />
+              <h2 className="text-xl font-bold animate-pulse">Processing Spreadsheet...</h2>
+              <p className={cn("text-sm", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>
+                Parsing rows and analyzing data structure
+              </p>
+
+              {/* Skeleton Mockup */}
+              <div className={cn(
+                "w-full max-w-4xl mt-8 border rounded-2xl p-6 overflow-hidden",
+                isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200 shadow-sm"
+              )}>
+                 <div className="flex gap-4 mb-6">
+                    <div className={cn("h-10 w-32 rounded-xl animate-pulse", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                    <div className={cn("h-10 w-32 rounded-xl animate-pulse", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                    <div className={cn("h-10 w-full rounded-xl animate-pulse", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                 </div>
+                 <div className="space-y-4">
+                    {[1,2,3,4,5].map(i => (
+                      <div key={i} className="flex gap-4">
+                        <div className={cn("h-6 w-12 rounded animate-pulse", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                        <div className={cn("h-6 flex-1 rounded animate-pulse delay-75", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                        <div className={cn("h-6 w-1/4 rounded animate-pulse delay-150", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                        <div className={cn("h-6 w-1/4 rounded animate-pulse delay-200", isDarkMode ? "bg-zinc-800" : "bg-zinc-200")} />
+                      </div>
+                    ))}
+                 </div>
+              </div>
+            </motion.div>
+          ) : !workbook ? (
             <motion.div 
               key="upload"
               initial={{ opacity: 0, y: 20 }}
@@ -512,7 +548,7 @@ export default function ExcelViewer() {
                     "w-20 h-20 mx-auto rounded-3xl flex items-center justify-center mb-6 transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3 shadow-lg",
                     isDarkMode ? "bg-zinc-800 shadow-black/50 text-indigo-400" : "bg-white shadow-indigo-500/10 text-indigo-600"
                   )}>
-                    {isLoading ? <RefreshCw className="w-10 h-10 animate-spin" /> : <UploadCloud className="w-10 h-10" />}
+                    <UploadCloud className="w-10 h-10" />
                   </div>
                   
                   <h3 className="text-xl font-bold mb-2">Upload Spreadsheet</h3>
