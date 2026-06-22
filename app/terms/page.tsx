@@ -16,7 +16,7 @@ export default function TermsOfService() {
           <section>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-4">1. Acceptance of Terms</h2>
             <p>
-              By accessing and using Excel Insights ("the Application"), you agree to be bound by these Terms of Service. 
+              By accessing and using Excel Insights (&quot;the Application&quot;), you agree to be bound by these Terms of Service. 
               If you do not agree to these terms, please do not use the Application.
             </p>
           </section>
@@ -54,7 +54,7 @@ export default function TermsOfService() {
           <section>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-4">5. Disclaimer of Warranties</h2>
             <p>
-              The Application is provided "as is" and "as available" without any warranties of any kind. 
+              The Application is provided &quot;as is&quot; and &quot;as available&quot; without any warranties of any kind. 
               We do not guarantee that the service will be uninterrupted, error-free, or completely secure. 
               All data processing happens locally, and we are not responsible for lost data or modified spreadsheets.
             </p>
