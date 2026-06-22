@@ -16,7 +16,7 @@ export default function TermsOfService() {
           <section>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-4">1. Acceptance of Terms</h2>
             <p>
-              By accessing and using Excel Insights (&quot;the Application&quot;), you agree to be bound by these Terms of Service. 
+              By accessing and using Excel Insight (&quot;the Application&quot;), you agree to be bound by these Terms of Service. 
               If you do not agree to these terms, please do not use the Application.
             </p>
           </section>
@@ -24,7 +24,7 @@ export default function TermsOfService() {
           <section>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-4">2. Description of Service</h2>
             <p>
-              Excel Insights is a web-based utility that allows users to open, view, visualize, and query spreadsheet data 
+              Excel Insight is a web-based utility that allows users to open, view, visualize, and query spreadsheet data 
               (including XLSX and CSV formats) locally within their browser. The Application integrates with Google Drive and 
               Google Sheets to facilitate the opening and exporting of files directly from and to your Google Account.
             </p>

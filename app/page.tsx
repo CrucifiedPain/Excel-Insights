@@ -18,7 +18,7 @@ export default function Home() {
             Terms of Service
           </Link>
         </div>
-        <p className="mt-2 text-xs opacity-75">© {new Date().getFullYear()} Excel Insights. All rights reserved.</p>
+        <p className="mt-2 text-xs opacity-75">© {new Date().getFullYear()} Excel Insight. All rights reserved.</p>
       </footer>
     </div>
   );

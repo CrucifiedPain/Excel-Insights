@@ -16,7 +16,7 @@ export default function PrivacyPolicy() {
           <section>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-4">1. Introduction</h2>
             <p>
-              Welcome to Excel Insights. We are committed to protecting your personal information and your right to privacy. 
+              Welcome to Excel Insight. We are committed to protecting your personal information and your right to privacy. 
               This Privacy Policy explains how we collect, use, and process your information when you use our application to 
               view, analyze, and manage your spreadsheet data.
             </p>
@@ -47,7 +47,7 @@ export default function PrivacyPolicy() {
           <section>
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-4">4. Google API Services User Data Policy</h2>
             <p>
-              Excel Insights&apos; use and transfer to any other app of information received from Google APIs will adhere to the{' '}
+              Excel Insight&apos;s use and transfer to any other app of information received from Google APIs will adhere to the{' '}
               <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400 hover:underline">
                 Google API Services User Data Policy
               </a>

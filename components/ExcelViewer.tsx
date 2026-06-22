@@ -622,7 +622,7 @@ export default function ExcelViewer() {
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-bold text-lg leading-tight tracking-tight">Excel Viewer</h1>
+              <h1 className="font-bold text-lg leading-tight tracking-tight">Excel Insight</h1>
               <p className={cn("text-xs", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>Local processing • Secure • Analytical</p>
             </div>
           </div>
