@@ -8,7 +8,6 @@ import {
   FileSpreadsheet,
   Table as TableIcon,
   BarChart3,
-  Bot,
   Layers,
   LayoutDashboard,
   Settings2,
@@ -16,7 +15,6 @@ import {
   ChevronUp,
   CheckSquare,
   Square,
-  Sparkles,
   Download,
   Trash2,
   RefreshCw,
@@ -48,7 +46,7 @@ export default function ExcelViewer() {
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   
-  const [activeTab, setActiveTab] = useState<'table' | 'charts' | 'ai' | 'summary'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'charts' | 'summary'>('table');
 
   const [parseSettings, setParseSettings] = useState({ startCell: '', endCell: '' });
   const [showSettings, setShowSettings] = useState(false);
@@ -62,11 +60,6 @@ export default function ExcelViewer() {
   const [chartType, setChartType] = useState<'bar' | 'line' | 'pie' | 'area'>('bar');
   const [xAxisCol, setXAxisCol] = useState<string>('');
   const [yAxisCol, setYAxisCol] = useState<string>('');
-
-  // AI states
-  const [aiPrompt, setAiPrompt] = useState<string>('');
-  const [aiResponse, setAiResponse] = useState<string>('');
-  const [isAiLoading, setIsAiLoading] = useState(false);
 
   useEffect(() => {
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -316,50 +309,6 @@ export default function ExcelViewer() {
     setSelectedRows(new Set());
   };
 
-  const checkGeminiConfigured = () => {
-    // API logic should be handled server-side in Next.js
-    return true;
-  };
-
-  const askAiAboutData = async () => {
-    if (!aiPrompt.trim() || data.length === 0) return;
-    
-    if (!checkGeminiConfigured()) {
-       setAiResponse("Please configure GEMINI_API_KEY environment variable. Server-side API required.");
-       return;
-    }
-
-    setIsAiLoading(true);
-    setAiResponse('');
-    
-    try {
-      const response = await fetch('/api/gemini/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: aiPrompt,
-          dataPreview: data.slice(0, 50),
-          headers: headers,
-          fileName,
-          sheetName: activeSheet,
-          totalRows: data.length
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      setAiResponse(result.text);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      setAiResponse(`Error: ${msg || 'Failed to analyze data.'}`);
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
   // Generate basic summary statistics
   const summaryStats = useMemo(() => {
     if (filteredData.length === 0 || headers.length === 0) return null;
@@ -496,23 +445,35 @@ export default function ExcelViewer() {
             </div>
           </div>
           
-          {fileName && (
-            <div className="flex items-center gap-3">
-              <span className={cn("text-sm font-medium", isDarkMode ? "text-zinc-300" : "text-zinc-600")}>
-                {fileName}
-              </span>
-              <button 
-                onClick={clearState}
-                className={cn(
-                  "p-2 flex items-center justify-center rounded-lg transition-colors",
-                  isDarkMode ? "hover:bg-zinc-800 text-zinc-400 hover:text-rose-400" : "hover:bg-zinc-100 text-zinc-500 hover:text-rose-600"
-                )}
-                title="Close file"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          )}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setIsDarkMode(!isDarkMode)}
+              className={cn(
+                "p-2 rounded-xl transition-colors",
+                isDarkMode ? "bg-zinc-800 text-zinc-400 hover:text-indigo-400 hover:bg-zinc-800" : "bg-zinc-100 text-zinc-500 hover:text-indigo-600 hover:bg-indigo-50"
+              )}
+              title={`Switch to ${isDarkMode ? 'Light' : 'Dark'} Mode`}
+            >
+              {isDarkMode ? '☀️' : '🌙'}
+            </button>
+            {fileName && (
+              <div className="flex items-center gap-3">
+                <span className={cn("text-sm font-medium", isDarkMode ? "text-zinc-300" : "text-zinc-600")}>
+                  {fileName}
+                </span>
+                <button 
+                  onClick={clearState}
+                  className={cn(
+                    "p-2 flex items-center justify-center rounded-lg transition-colors",
+                    isDarkMode ? "hover:bg-zinc-800 text-zinc-400 hover:text-rose-400" : "hover:bg-zinc-100 text-zinc-500 hover:text-rose-600"
+                  )}
+                  title="Close file"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -562,6 +523,29 @@ export default function ExcelViewer() {
                     Drag and drop your Excel file here, or click to browse. <br/>
                     Supports .xlsx, .xls, and .csv
                   </p>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 mb-8 text-left">
+                    <div className={cn("p-4 rounded-xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200 shadow-sm")}>
+                      <TableIcon className="w-5 h-5 mb-2 text-indigo-500" />
+                      <h4 className="font-bold text-sm">View Data</h4>
+                      <p className={cn("text-xs mt-1", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>View and filter your spreadsheet data easily.</p>
+                    </div>
+                    <div className={cn("p-4 rounded-xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200 shadow-sm")}>
+                      <LayoutDashboard className="w-5 h-5 mb-2 text-emerald-500" />
+                      <h4 className="font-bold text-sm">Summary</h4>
+                      <p className={cn("text-xs mt-1", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>Get instant statistics on columns.</p>
+                    </div>
+                    <div className={cn("p-4 rounded-xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200 shadow-sm")}>
+                      <BarChart3 className="w-5 h-5 mb-2 text-amber-500" />
+                      <h4 className="font-bold text-sm">Visualize</h4>
+                      <p className={cn("text-xs mt-1", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>Create charts instantly from your data.</p>
+                    </div>
+                    <div className={cn("p-4 rounded-xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200 shadow-sm")}>
+                      <Download className="w-5 h-5 mb-2 text-rose-500" />
+                      <h4 className="font-bold text-sm">Export</h4>
+                      <p className={cn("text-xs mt-1", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>Export filtered data to CSV or Excel.</p>
+                    </div>
+                  </div>
 
                   <div className="flex items-center justify-center gap-4 text-xs font-semibold uppercase tracking-wider">
                      <span className={cn("px-3 py-1 rounded-full", isDarkMode ? "bg-zinc-800 text-zinc-300" : "bg-white text-zinc-600 shadow-sm")}>Fully Local</span>
@@ -702,12 +686,11 @@ export default function ExcelViewer() {
                   {[
                     { id: 'table', icon: <TableIcon className="w-4 h-4" />, label: 'Data Table' },
                     { id: 'summary', icon: <LayoutDashboard className="w-4 h-4" />, label: 'Summary Stats' },
-                    { id: 'charts', icon: <BarChart3 className="w-4 h-4" />, label: 'Visualize' },
-                    { id: 'ai', icon: <Bot className="w-4 h-4" />, label: 'AI Assitance' },
+                    { id: 'charts', icon: <BarChart3 className="w-4 h-4" />, label: 'Visualize' }
                   ].map(tab => (
                     <button
                       key={tab.id}
-                      onClick={() => setActiveTab(tab.id as 'table' | 'charts' | 'ai' | 'summary')}
+                      onClick={() => setActiveTab(tab.id as 'table' | 'charts' | 'summary')}
                       className={cn(
                         "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all whitespace-nowrap border",
                         activeTab === tab.id 
@@ -950,73 +933,6 @@ export default function ExcelViewer() {
                     </div>
                     <div className="flex-1 min-h-[400px] p-6">
                       {renderChart()}
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === 'ai' && (
-                  <div className="flex flex-col h-[500px]">
-                    <div className="flex-1 p-6 overflow-y-auto">
-                      {aiResponse ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
-                           <div className="flex items-center gap-2 mb-4 text-indigo-500 font-bold">
-                             <Sparkles className="w-5 h-5" /> AI Analysis
-                           </div>
-                           <div className={cn("p-6 rounded-2xl whitespace-pre-wrap leading-relaxed", isDarkMode ? "bg-zinc-800/50" : "bg-zinc-50")}>
-                              {aiResponse}
-                           </div>
-                        </div>
-                      ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                           <div className={cn("w-16 h-16 rounded-full flex items-center justify-center mb-6", isDarkMode ? "bg-indigo-500/20 text-indigo-400" : "bg-indigo-100 text-indigo-600")}>
-                              <Bot className="w-8 h-8" />
-                           </div>
-                           <h3 className="text-xl font-bold mb-2">Ask AI About Your Data</h3>
-                           <p className={cn("max-w-md mx-auto mb-8", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>
-                             Ask questions to find trends, summarize information, or find specific details within the {activeSheet} sheet.
-                           </p>
-                           <div className="flex flex-wrap items-center justify-center gap-3">
-                             {["Summarize this dataset", "What are the key trends?", "Are there any outliers?"].map(p => (
-                               <button 
-                                 key={p} 
-                                 onClick={() => setAiPrompt(p)}
-                                 className={cn("px-4 py-2 rounded-full text-sm border transition-colors", isDarkMode ? "border-zinc-700 bg-zinc-800/50 hover:bg-zinc-700 text-zinc-300" : "border-zinc-200 bg-zinc-50 hover:bg-zinc-100 text-zinc-700")}
-                               >
-                                 &quot;{p}&quot;
-                               </button>
-                             ))}
-                           </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className={cn("p-4 border-t relative", isDarkMode ? "border-zinc-800 bg-zinc-900/50" : "border-zinc-200 bg-zinc-50")}>
-                      <textarea
-                        value={aiPrompt}
-                        onChange={e => setAiPrompt(e.target.value)}
-                        placeholder="Ask a question about this data..."
-                        className={cn(
-                          "w-full resize-none p-4 pr-16 border rounded-xl text-sm focus:outline-none focus:ring-2",
-                          isDarkMode ? "bg-black border-zinc-800 text-zinc-100 focus:border-zinc-600 focus:ring-zinc-800" : "bg-white border-zinc-200 text-zinc-900 focus:border-indigo-500 focus:ring-indigo-100"
-                        )}
-                        rows={2}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            askAiAboutData();
-                          }
-                        }}
-                      />
-                      <button
-                        onClick={askAiAboutData}
-                        disabled={isAiLoading || !aiPrompt.trim()}
-                        className={cn(
-                          "absolute bottom-7 right-7 p-2 rounded-lg transition-all",
-                          isAiLoading ? "opacity-50 cursor-not-allowed" : "hover:scale-105",
-                          isDarkMode ? "bg-indigo-500 text-white" : "bg-indigo-600 text-white"
-                        )}
-                      >
-                        {isAiLoading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                      </button>
                     </div>
                   </div>
                 )}
