@@ -54,7 +54,7 @@ export default function ExcelViewer() {
   const [rawHeaders, setRawHeaders] = useState<string[]>([]);
   const [excludedCols, setExcludedCols] = useState<Set<string>>(new Set());
 
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
   
   // Chart states
   const [chartType, setChartType] = useState<'bar' | 'line' | 'pie' | 'area'>('bar');
@@ -62,9 +62,6 @@ export default function ExcelViewer() {
   const [yAxisCol, setYAxisCol] = useState<string>('');
 
   useEffect(() => {
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setIsDarkMode(true);
-    }
   }, []);
 
   const loadSheetData = useCallback((wb: XLSX.WorkBook, sheetName: string, config?: { startCell: string, endCell: string }) => {
