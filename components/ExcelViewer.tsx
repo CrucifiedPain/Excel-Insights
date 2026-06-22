@@ -18,7 +18,9 @@ import {
   Download,
   Trash2,
   RefreshCw,
-  Search
+  Search,
+  Cloud,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
@@ -26,6 +28,19 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   LineChart, Line, PieChart, Pie, Cell, AreaChart, Area
 } from 'recharts';
+import { initAuth, googleSignIn, getAccessToken, logout } from '@/lib/firebase';
+import firebaseConfig from '@/firebase-applet-config.json';
+import { uploadToGoogleSheets } from '@/lib/googleSheets';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+declare global {
+  interface Window {
+    gapi: any;
+    google: any;
+  }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 
 type DataRow = Record<string, unknown>;
 
@@ -56,13 +71,66 @@ export default function ExcelViewer() {
 
   const [isDarkMode, setIsDarkMode] = useState(true);
   
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isExportingToDrive, setIsExportingToDrive] = useState(false);
+
   // Chart states
   const [chartType, setChartType] = useState<'bar' | 'line' | 'pie' | 'area'>('bar');
   const [xAxisCol, setXAxisCol] = useState<string>('');
   const [yAxisCol, setYAxisCol] = useState<string>('');
 
   useEffect(() => {
+    const unsubscribe = initAuth(
+      () => setIsAuthenticated(true),
+      () => setIsAuthenticated(false)
+    );
+    return () => unsubscribe();
   }, []);
+
+  const handleGoogleLogin = async () => {
+    try {
+      await googleSignIn();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to sign in with Google");
+    }
+  };
+
+  const handleGoogleLogout = async () => {
+    try {
+      await logout();
+    } catch (err: unknown) {
+      console.error(err);
+    }
+  };
+
+  const handleExportToSheets = async () => {
+    if (!workbook || !activeSheet || !fileName) return;
+
+    if (!isAuthenticated) {
+      await handleGoogleLogin();
+      return;
+    }
+
+    try {
+      setIsExportingToDrive(true);
+      setError(null);
+      
+      const token = await getAccessToken();
+      if (!token) throw new Error("No access token available. Please sign in again.");
+
+      const sheetFileName = `modified_${fileName.split('.')[0] || 'data'}`;
+      
+      const url = await uploadToGoogleSheets(token, sheetFileName, data);
+      
+      // Open the new sheet in a new tab
+      window.open(url, '_blank');
+      
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to export to Google Sheets');
+    } finally {
+      setIsExportingToDrive(false);
+    }
+  };
 
   const loadSheetData = useCallback((wb: XLSX.WorkBook, sheetName: string, config?: { startCell: string, endCell: string }) => {
     try {
@@ -144,6 +212,131 @@ export default function ExcelViewer() {
     }
   };
 
+  const fetchDriveFile = async (fileId: string, name: string, token: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=mimeType`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const meta = await metaRes.json();
+      
+      let url = "";
+      if (meta.mimeType === "application/vnd.google-apps.spreadsheet") {
+        url = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
+      } else {
+        url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      }
+
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (!res.ok) throw new Error("Failed to download file");
+
+      const arrayBuffer = await res.arrayBuffer();
+      
+      setFileName(name);
+      
+      if (name.toLowerCase().endsWith('.csv') || meta.mimeType === "text/csv") {
+        const textDecoded = new TextDecoder().decode(arrayBuffer);
+        Papa.parse(textDecoded, {
+          header: true,
+          skipEmptyLines: true,
+          dynamicTyping: true,
+          complete: (results) => {
+            try {
+              const parsedData = results.data as DataRow[];
+              const allHeaders = results.meta.fields || [];
+              
+              const worksheet = XLSX.utils.json_to_sheet(parsedData);
+              const wb = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(wb, worksheet, 'CSV Data');
+              
+              setParseSettings({ startCell: '', endCell: '' });
+              setExcludedCols(new Set());
+              setWorkbook(wb);
+              setSheets(['CSV Data']);
+              setFileName(name);
+              setActiveSheet('CSV Data');
+              
+              setRawHeaders(allHeaders);
+              setRawData(parsedData);
+              setHeaders(allHeaders);
+              setData(parsedData);
+              
+              if (allHeaders.length > 0) setXAxisCol(allHeaders[0]);
+              if (allHeaders.length > 1) setYAxisCol(allHeaders[1]);
+              
+              setIsLoading(false);
+            } catch {
+              setError("Failed to process the CSV file.");
+              setIsLoading(false);
+            }
+          },
+          error: (error: Error) => {
+            setError(`Failed to parse CSV: ${error.message}`);
+            setIsLoading(false);
+          }
+        });
+        return;
+      }
+
+      const wb = XLSX.read(arrayBuffer, { type: 'array' });
+      processWorkbook(wb, name);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to open file');
+      setIsLoading(false);
+    }
+  };
+
+  const handleDrivePicker = async () => {
+    try {
+      let token = await getAccessToken();
+      if (!isAuthenticated || !token) {
+        const result = await googleSignIn();
+        token = result?.accessToken || null;
+      }
+
+      if (!token) throw new Error("Authentication failed");
+
+      const loadGoogleAPI = () => {
+        return new Promise<void>((resolve, reject) => {
+          if (window.gapi && window.google?.picker) {
+             resolve();
+             return;
+          }
+          const script = document.createElement("script");
+          script.src = "https://apis.google.com/js/api.js";
+          script.onload = () => {
+            window.gapi.load("picker", { callback: resolve });
+          };
+          script.onerror = reject;
+          document.body.appendChild(script);
+        });
+      };
+
+      await loadGoogleAPI();
+
+      const picker = new window.google.picker.PickerBuilder()
+        .addView(window.google.picker.ViewId.SPREADSHEETS)
+        .addView(new window.google.picker.DocsView().setIncludeFolders(true).setMimeTypes('application/vnd.google-apps.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'))
+        .setOAuthToken(token)
+        .setDeveloperKey(firebaseConfig.apiKey)
+        .setCallback(async (data: { action: string; docs: { id: string; name: string }[] }) => {
+          if (data.action === window.google.picker.Action.PICKED) {
+             const file = data.docs[0];
+             await fetchDriveFile(file.id, file.name, token as string);
+          }
+        })
+        .build();
+        
+      picker.setVisible(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to launch Drive picker");
+    }
+  };
+
   const handleFile = (f: File) => {
     setIsLoading(true);
     setFile(f);
@@ -221,14 +414,7 @@ export default function ExcelViewer() {
         return newRow;
     });
     setData(newData);
-    
-    if (workbook && activeSheet) {
-      const newWorksheet = XLSX.utils.json_to_sheet(newData);
-      workbook.Sheets[activeSheet] = newWorksheet;
-      setWorkbook({ ...workbook });
-    }
-  }, [excludedCols, rawData, rawHeaders, workbook, activeSheet]);
-
+  }, [excludedCols, rawData, rawHeaders]);
 
   const filteredData = useMemo(() => {
     let result = data.map((row, index) => ({ row, index }));
@@ -261,12 +447,6 @@ export default function ExcelViewer() {
     const newData = data.filter((_, i) => !selectedRows.has(i));
     setData(newData);
     setSelectedRows(new Set());
-    
-    if (workbook && activeSheet) {
-      const newWorksheet = XLSX.utils.json_to_sheet(newData);
-      workbook.Sheets[activeSheet] = newWorksheet;
-      setWorkbook({ ...workbook });
-    }
   };
 
   const handleExportCSV = () => {
@@ -283,8 +463,11 @@ export default function ExcelViewer() {
   };
 
   const handleExport = () => {
-    if (!workbook || !fileName) return;
-    XLSX.writeFile(workbook, `modified_${fileName}`);
+    if (!fileName || !activeSheet || !workbook) return;
+    const newWb = XLSX.utils.book_new();
+    const newWs = XLSX.utils.json_to_sheet(data);
+    XLSX.utils.book_append_sheet(newWb, newWs, activeSheet);
+    XLSX.writeFile(newWb, `modified_${fileName.split('.')[0] || 'data'}.xlsx`);
   };
 
   const clearState = () => {
@@ -352,16 +535,18 @@ export default function ExcelViewer() {
       value: typeof row[yAxisCol] === 'number' ? row[yAxisCol] : (Number(row[yAxisCol]) || 0)
     }));
 
+    const formatTick = (val: string) => val.length > 15 ? val.substring(0, 15) + '...' : val;
+
     switch (chartType) {
       case 'bar':
         return (
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 50 }}>
+            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 65 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#333' : '#eee'} />
-              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} />
+              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} tickFormatter={formatTick} />
               <YAxis stroke={isDarkMode ? '#aaa' : '#666'} />
               <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
-              <Legend />
+              <Legend verticalAlign="top" height={36}/>
               <Bar dataKey="value" name={yAxisCol} fill="#6366f1" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -369,12 +554,12 @@ export default function ExcelViewer() {
       case 'line':
         return (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 50 }}>
+            <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 65 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#333' : '#eee'} />
-              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} />
+              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} tickFormatter={formatTick} />
               <YAxis stroke={isDarkMode ? '#aaa' : '#666'} />
               <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
-              <Legend />
+              <Legend verticalAlign="top" height={36}/>
               <Line type="monotone" dataKey="value" name={yAxisCol} stroke="#ec4899" strokeWidth={2} activeDot={{ r: 8 }} />
             </LineChart>
           </ResponsiveContainer>
@@ -382,12 +567,12 @@ export default function ExcelViewer() {
       case 'area':
         return (
            <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 50 }}>
+            <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 65 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? '#333' : '#eee'} />
-              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} />
+              <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} stroke={isDarkMode ? '#aaa' : '#666'} tickFormatter={formatTick} />
               <YAxis stroke={isDarkMode ? '#aaa' : '#666'} />
               <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
-              <Legend />
+              <Legend verticalAlign="top" height={36}/>
               <Area type="monotone" dataKey="value" name={yAxisCol} stroke="#14b8a6" fill="#ccfbf1" fillOpacity={isDarkMode ? 0.2 : 0.8} />
             </AreaChart>
           </ResponsiveContainer>
@@ -411,7 +596,7 @@ export default function ExcelViewer() {
                 ))}
               </Pie>
               <RechartsTooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderColor: isDarkMode ? '#27272a' : '#e4e4e7', color: isDarkMode ? '#fff' : '#000' }} />
-              <Legend />
+              <Legend verticalAlign="top" height={36}/>
             </PieChart>
           </ResponsiveContainer>
         );
@@ -523,7 +708,7 @@ export default function ExcelViewer() {
               <div className="w-full max-w-xl">
                 <div 
                   className={cn(
-                    "border-2 border-dashed rounded-3xl p-12 text-center transition-all duration-300 group relative overflow-hidden",
+                    "border-2 border-dashed rounded-3xl p-12 text-center transition-all duration-300 group overflow-hidden",
                     isDragging 
                       ? (isDarkMode ? "border-indigo-500 bg-indigo-500/10" : "border-indigo-500 bg-indigo-50")
                       : (isDarkMode ? "border-zinc-800 hover:border-zinc-600 hover:bg-zinc-900/50" : "border-zinc-300 hover:border-zinc-400 hover:bg-zinc-100/50")
@@ -537,13 +722,6 @@ export default function ExcelViewer() {
                     if (files && files.length > 0) handleFile(files[0]);
                   }}
                 >
-                  <input 
-                    type="file" 
-                    accept=".xlsx,.xls,.csv" 
-                    onChange={handleFileUpload} 
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                  />
-                  
                   <div className={cn(
                     "w-20 h-20 mx-auto rounded-3xl flex items-center justify-center mb-6 transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3 shadow-lg",
                     isDarkMode ? "bg-zinc-800 shadow-black/50 text-indigo-400" : "bg-white shadow-indigo-500/10 text-indigo-600"
@@ -552,10 +730,37 @@ export default function ExcelViewer() {
                   </div>
                   
                   <h3 className="text-xl font-bold mb-2">Upload Spreadsheet</h3>
-                  <p className={cn("text-sm mb-8", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>
-                    Drag and drop your Excel file here, or click to browse. <br/>
+                  <p className={cn("text-sm mb-6", isDarkMode ? "text-zinc-400" : "text-zinc-500")}>
+                    Drag and drop your Excel file here, or choose an option below. <br/>
                     Supports .xlsx, .xls, and .csv
                   </p>
+
+                  <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-8 relative z-20">
+                    <label className={cn(
+                      "cursor-pointer px-6 py-3 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all shadow-sm",
+                      isDarkMode ? "bg-indigo-500 text-white hover:bg-indigo-600" : "bg-indigo-600 text-white hover:bg-indigo-700"
+                    )}>
+                      <UploadCloud className="w-4 h-4" />
+                      Browse Files
+                      <input 
+                        type="file" 
+                        accept=".xlsx,.xls,.csv" 
+                        onChange={handleFileUpload} 
+                        className="hidden"
+                      />
+                    </label>
+                    
+                    <button 
+                      onClick={handleDrivePicker}
+                      className={cn(
+                        "cursor-pointer px-6 py-3 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all shadow-sm border",
+                        isDarkMode ? "bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 hover:text-white" : "bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:text-indigo-600"
+                      )}
+                    >
+                      <Cloud className="w-4 h-4" />
+                      Google Drive
+                    </button>
+                  </div>
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 mb-8 text-left">
                     <div className={cn("p-4 rounded-xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200 shadow-sm")}>
@@ -799,6 +1004,32 @@ export default function ExcelViewer() {
                       <Download className="w-4 h-4" />
                        <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded bg-emerald-500 text-white leading-tight">XLS</span>
                     </button>
+
+                    <button
+                      onClick={handleExportToSheets}
+                      disabled={isExportingToDrive}
+                      className={cn(
+                        "px-4 py-2.5 rounded-xl border transition-all shrink-0 font-medium text-sm flex items-center gap-2",
+                        isDarkMode ? "bg-indigo-500/10 border-indigo-500/20 text-indigo-400 hover:bg-indigo-500/20" : "bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100"
+                      )}
+                      title="Save & Open in Google Sheets"
+                    >
+                      {isExportingToDrive ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+                      <span className="hidden sm:inline">Drive</span>
+                    </button>
+
+                    {isAuthenticated && (
+                       <button
+                         onClick={handleGoogleLogout}
+                         className={cn(
+                           "p-2.5 rounded-xl border transition-all shrink-0 text-sm flex items-center justify-center",
+                           isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800" : "bg-white border-zinc-200 text-zinc-500 hover:text-rose-500 hover:bg-zinc-50"
+                         )}
+                         title="Sign out of Google"
+                       >
+                         <LogOut className="w-4 h-4" />
+                       </button>
+                    )}
                 </div>
               </div>
 
@@ -964,7 +1195,7 @@ export default function ExcelViewer() {
                          </select>
                       </div>
                     </div>
-                    <div className="flex-1 min-h-[400px] p-6">
+                    <div className="w-full h-[500px] p-6 relative">
                       {renderChart()}
                     </div>
                   </div>
