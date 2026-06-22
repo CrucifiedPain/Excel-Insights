@@ -322,7 +322,7 @@ export default function ExcelViewer() {
         .addView(window.google.picker.ViewId.SPREADSHEETS)
         .addView(new window.google.picker.DocsView().setIncludeFolders(true).setMimeTypes('application/vnd.google-apps.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'))
         .setOAuthToken(token)
-        .setDeveloperKey(firebaseConfig.apiKey)
+        .setDeveloperKey(process.env.NEXT_PUBLIC_GOOGLE_PICKER_API_KEY || firebaseConfig.apiKey)
         .setCallback(async (data: { action: string; docs: { id: string; name: string }[] }) => {
           if (data.action === window.google.picker.Action.PICKED) {
              const file = data.docs[0];
