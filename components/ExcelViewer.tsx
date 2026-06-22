@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import Papa from 'papaparse';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -18,7 +19,8 @@ import {
   Sparkles,
   Download,
   Trash2,
-  RefreshCw
+  RefreshCw,
+  Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '@/lib/utils';
@@ -39,6 +41,9 @@ export default function ExcelViewer() {
   const [data, setData] = useState<DataRow[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -154,6 +159,49 @@ export default function ExcelViewer() {
     setFile(f);
     setError(null);
     
+    if (f.name.toLowerCase().endsWith('.csv')) {
+      Papa.parse(f, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: true,
+        complete: (results) => {
+          try {
+            const parsedData = results.data as DataRow[];
+            const allHeaders = results.meta.fields || [];
+            
+            const worksheet = XLSX.utils.json_to_sheet(parsedData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, worksheet, 'CSV Data');
+            
+            setParseSettings({ startCell: '', endCell: '' });
+            setExcludedCols(new Set());
+            setWorkbook(wb);
+            setSheets(['CSV Data']);
+            setFileName(f.name);
+            setActiveSheet('CSV Data');
+            
+            setRawHeaders(allHeaders);
+            setRawData(parsedData);
+            setHeaders(allHeaders);
+            setData(parsedData);
+            
+            if (allHeaders.length > 0) setXAxisCol(allHeaders[0]);
+            if (allHeaders.length > 1) setYAxisCol(allHeaders[1]);
+            
+            setIsLoading(false);
+          } catch {
+            setError("Failed to process the CSV file.");
+            setIsLoading(false);
+          }
+        },
+        error: (error) => {
+          setError(`Failed to parse CSV: ${error.message}`);
+          setIsLoading(false);
+        }
+      });
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -192,6 +240,58 @@ export default function ExcelViewer() {
   }, [excludedCols, rawData, rawHeaders, workbook, activeSheet]);
 
 
+  const filteredData = useMemo(() => {
+    let result = data.map((row, index) => ({ row, index }));
+    if (searchQuery) {
+      const lowerQuery = searchQuery.toLowerCase();
+      result = result.filter(({ row }) => {
+        return headers.some(h => String(row[h]).toLowerCase().includes(lowerQuery));
+      });
+    }
+    return result;
+  }, [data, searchQuery, headers]);
+
+  const toggleRowSelection = (originalIndex: number) => {
+    const newSet = new Set(selectedRows);
+    if (newSet.has(originalIndex)) newSet.delete(originalIndex);
+    else newSet.add(originalIndex);
+    setSelectedRows(newSet);
+  };
+
+  const toggleAllRowsSelection = () => {
+    if (selectedRows.size === filteredData.length) {
+      setSelectedRows(new Set());
+    } else {
+      setSelectedRows(new Set(filteredData.map(item => item.index))); // Index relative to original data
+    }
+  };
+
+  const deleteSelectedRows = () => {
+    if (selectedRows.size === 0) return;
+    const newData = data.filter((_, i) => !selectedRows.has(i));
+    setData(newData);
+    setSelectedRows(new Set());
+    
+    if (workbook && activeSheet) {
+      const newWorksheet = XLSX.utils.json_to_sheet(newData);
+      workbook.Sheets[activeSheet] = newWorksheet;
+      setWorkbook({ ...workbook });
+    }
+  };
+
+  const handleExportCSV = () => {
+    if (!filteredData.length) return;
+    const csv = Papa.unparse(filteredData.map(item => item.row));
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `export_${fileName?.split('.')[0] || 'data'}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleExport = () => {
     if (!workbook || !fileName) return;
     XLSX.writeFile(workbook, `modified_${fileName}`);
@@ -212,6 +312,8 @@ export default function ExcelViewer() {
     setFileName(null);
     setError(null);
     setActiveTab('table');
+    setSearchQuery('');
+    setSelectedRows(new Set());
   };
 
   const checkGeminiConfigured = () => {
@@ -260,12 +362,12 @@ export default function ExcelViewer() {
 
   // Generate basic summary statistics
   const summaryStats = useMemo(() => {
-    if (data.length === 0 || headers.length === 0) return null;
+    if (filteredData.length === 0 || headers.length === 0) return null;
     
     const stats: Record<string, { type: string, nulls: number, min?: number, max?: number, unique?: number, textSample?: string }> = {};
     
     headers.forEach(h => {
-      const values = data.map(row => row[h]);
+      const values = filteredData.map(({ row }) => row[h]);
       const validValues = values.filter(v => v !== null && v !== undefined && v !== '');
       
       const isNumeric = validValues.length > 0 && validValues.every(v => typeof v === 'number' || (!isNaN(Number(v)) && typeof v === 'string'));
@@ -290,16 +392,16 @@ export default function ExcelViewer() {
     });
     
     return stats;
-  }, [data, headers]);
+  }, [filteredData, headers]);
 
 
   const COLORS = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#8b5cf6', '#10b981', '#f43f5e', '#0ea5e9'];
 
   const renderChart = () => {
-    if (data.length === 0 || !xAxisCol || !yAxisCol) return <div className="p-8 text-center text-zinc-500">Not enough data to render chart</div>;
+    if (filteredData.length === 0 || !xAxisCol || !yAxisCol) return <div className="p-8 text-center text-zinc-500">Not enough data to render chart</div>;
     
     // Process data for charting: max 100 rows, try to cast Y to number
-    const chartData = data.slice(0, 100).map(row => ({
+    const chartData = filteredData.slice(0, 100).map(({ row }) => ({
       name: String(row[xAxisCol]),
       value: typeof row[yAxisCol] === 'number' ? row[yAxisCol] : (Number(row[yAxisCol]) || 0)
     }));
@@ -619,7 +721,34 @@ export default function ExcelViewer() {
                   ))}
                 </div>
 
-                <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="flex flex-1 items-center justify-end gap-2 w-full md:w-auto">
+                    {activeTab === 'table' && (
+                      <div className="relative w-full max-w-xs transition-all">
+                        <Search className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isDarkMode ? "text-zinc-500" : "text-zinc-400")} />
+                        <input
+                          type="text"
+                          placeholder="Search across all columns..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className={cn(
+                            "w-full pl-9 pr-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2",
+                            isDarkMode ? "bg-zinc-900 border-zinc-800 text-white focus:border-zinc-700 focus:ring-zinc-800" : "bg-white border-zinc-200 focus:border-indigo-500 focus:ring-indigo-100 placeholder-zinc-400"
+                          )}
+                        />
+                      </div>
+                    )}
+                    
+                    {activeTab === 'table' && selectedRows.size > 0 && (
+                      <button
+                        onClick={deleteSelectedRows}
+                        className={cn("px-4 py-2.5 rounded-xl text-sm font-bold transition-all shrink-0 flex items-center gap-2 border", 
+                          isDarkMode ? "bg-rose-500/20 text-rose-400 border-rose-500/30 hover:bg-rose-500/30" : "bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100"
+                        )}
+                      >
+                        <Trash2 className="w-4 h-4" /> Delete ({selectedRows.size})
+                      </button>
+                    )}
+
                     <select
                       value={activeSheet}
                       onChange={(e) => loadSheetData(workbook, e.target.value)}
@@ -632,14 +761,27 @@ export default function ExcelViewer() {
                     </select>
 
                     <button
-                      onClick={handleExport}
+                      onClick={handleExportCSV}
                       className={cn(
-                        "p-2.5 rounded-xl border transition-all shrink-0",
+                        "p-2.5 rounded-xl border transition-all shrink-0 group relative",
                         isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800" : "bg-white border-zinc-200 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50"
                       )}
-                      title="Export Modified Workbook"
+                      title="Export Displayed Rows to CSV"
                     >
                       <Download className="w-4 h-4" />
+                      <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded bg-indigo-500 text-white leading-tight">CSV</span>
+                    </button>
+                    
+                    <button
+                      onClick={handleExport}
+                      className={cn(
+                        "p-2.5 rounded-xl border transition-all shrink-0 group relative",
+                        isDarkMode ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800" : "bg-white border-zinc-200 text-zinc-500 hover:text-zinc-800 hover:bg-zinc-50"
+                      )}
+                      title="Export Modified Workbook (XLSX)"
+                    >
+                      <Download className="w-4 h-4" />
+                       <span className="absolute -top-1 -right-1 text-[9px] font-bold px-1 rounded bg-emerald-500 text-white leading-tight">XLS</span>
                     </button>
                 </div>
               </div>
@@ -657,14 +799,24 @@ export default function ExcelViewer() {
                           <p>No valid table data to display.</p>
                           <p className="text-sm opacity-60">Adjust Parse Settings or select different columns.</p>
                         </div>
+                     ) : filteredData.length === 0 ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500">
+                           <Search className="w-12 h-12 mb-4 opacity-50" />
+                           <p>No rows found matching &quot;{searchQuery}&quot;</p>
+                        </div>
                      ) : (
                         <table className="w-full text-sm text-left">
                           <thead className={cn(
                             "sticky top-0 z-10 text-xs uppercase font-bold",
-                            isDarkMode ? "bg-zinc-900 text-zinc-400" : "bg-zinc-100 text-zinc-500"
+                            isDarkMode ? "bg-zinc-900 text-zinc-400 border-b border-zinc-800" : "bg-zinc-100 text-zinc-500 border-b border-zinc-200"
                           )}>
                             <tr>
-                              <th className={cn("px-6 py-4 border-b", isDarkMode ? "border-zinc-800" : "border-zinc-200 w-16 text-center")}>#</th>
+                              <th className={cn("px-4 py-4 w-12 text-center border-r", isDarkMode ? "border-zinc-800" : "border-zinc-200")}>
+                                  <button onClick={toggleAllRowsSelection} className="flex items-center justify-center w-full h-full text-zinc-400 hover:text-indigo-500">
+                                      {selectedRows.size === filteredData.length ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                                  </button>
+                              </th>
+                              <th className={cn("px-4 py-4 border-b", isDarkMode ? "border-zinc-800" : "border-zinc-200 w-16 text-center")}>#</th>
                               {headers.map((h, i) => (
                                 <th key={i} className={cn("px-6 py-4 border-b whitespace-nowrap", isDarkMode ? "border-zinc-800" : "border-zinc-200")}>
                                   {h}
@@ -673,19 +825,30 @@ export default function ExcelViewer() {
                             </tr>
                           </thead>
                           <tbody>
-                            {data.slice(0, 1000).map((row, rowIndex) => (
-                              <tr key={rowIndex} className={cn(
-                                "border-b last:border-0 transition-colors",
-                                isDarkMode ? "border-zinc-800/50 hover:bg-zinc-800/50" : "border-zinc-100 hover:bg-zinc-50"
-                              )}>
-                                <td className={cn("px-6 py-3 font-mono text-xs opacity-50 text-center border-r", isDarkMode ? "border-zinc-800/50" : "border-zinc-100")}>{rowIndex + 1}</td>
-                                {headers.map((h, colIndex) => (
-                                  <td key={colIndex} className="px-6 py-3 whitespace-nowrap max-w-xs truncate" title={String(row[h])}>
-                                    {row[h] !== null && row[h] !== undefined ? String(row[h]) : <span className="opacity-30 italic">null</span>}
+                            {filteredData.slice(0, 1000).map(({ row, index: originalIndex }) => {
+                              return (
+                                <tr key={originalIndex} className={cn(
+                                  "border-b last:border-0 transition-colors",
+                                  isDarkMode ? "border-zinc-800/50 hover:bg-zinc-800/50" : "border-zinc-100 hover:bg-zinc-50",
+                                  selectedRows.has(originalIndex) && (isDarkMode ? "bg-indigo-500/10 hover:bg-indigo-500/20" : "bg-indigo-50 hover:bg-indigo-100")
+                                )}>
+                                  <td className={cn("px-4 py-3 text-center border-r pointer-events-auto", isDarkMode ? "border-zinc-800/50" : "border-zinc-100")}>
+                                      <button 
+                                        onClick={() => toggleRowSelection(originalIndex)}
+                                        className={cn("flex items-center justify-center w-full h-full text-zinc-400 hover:text-indigo-500", selectedRows.has(originalIndex) && "text-indigo-500")}
+                                      >
+                                          {selectedRows.has(originalIndex) ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                                      </button>
                                   </td>
-                                ))}
-                              </tr>
-                            ))}
+                                  <td className={cn("px-6 py-3 font-mono text-xs opacity-50 text-center border-r", isDarkMode ? "border-zinc-800/50" : "border-zinc-100")}>{originalIndex + 1}</td>
+                                  {headers.map((h, colIndex) => (
+                                    <td key={colIndex} className="px-6 py-3 whitespace-nowrap max-w-xs truncate" title={String(row[h])}>
+                                      {row[h] !== null && row[h] !== undefined ? String(row[h]) : <span className="opacity-30 italic">null</span>}
+                                    </td>
+                                  ))}
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                      )}
@@ -699,7 +862,7 @@ export default function ExcelViewer() {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       <div className={cn("p-6 rounded-2xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200")}>
                         <h3 className={cn("text-xs uppercase font-bold tracking-widest mb-1", isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Total Rows</h3>
-                        <p className="text-4xl font-light">{data.length}</p>
+                        <p className="text-4xl font-light">{filteredData.length}</p>
                       </div>
                       <div className={cn("p-6 rounded-2xl border", isDarkMode ? "bg-zinc-900 border-zinc-800" : "bg-zinc-50 border-zinc-200")}>
                          <h3 className={cn("text-xs uppercase font-bold tracking-widest mb-1", isDarkMode ? "text-zinc-500" : "text-zinc-500")}>Active Columns</h3>
